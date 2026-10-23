@@ -1,59 +1,100 @@
-import { registerUser } from "./user.service.js";
+
+import {
+  registerUser,
+  verifyEmail,
+  resendVerificationOtp,
+  loginUser,
+  logoutUser,
+} from "./user.service.js";
+
+import { sendSuccess } from "../../utils/apiResponse.js";
 
 export async function register(req, res) {
-  try {
-    const { firstName, lastName, email, password } = req.body;
+  const { firstName, lastName, email, password } = req.body ?? {};
 
-    // Basic input validation
-    if (
-      typeof firstName !== "string" ||
-      typeof email !== "string" ||
-      typeof password !== "string" ||
-      !firstName.trim() ||
-      !email.trim() ||
-      password.length < 8 ||
-      password.length > 72 ||
-      (lastName != null && typeof lastName !== "string")
-    ) {
-      return res.status(400).json({
-        status: "error",
-        message:
-          "Provide a first name, valid email field, and password of 8–72 characters.",
-      });
-    }
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      return res.status(400).json({
-        status: "error",
-        message: "Please provide a valid email address.",
-      });
-    }
-
-    const user = await registerUser({
-      firstName,
-      lastName,
-      email,
-      password,
-    });
-
-    return res.status(201).json({
-      status: "success",
-      message: "User registered successfully",
-      data: { user },
-    });
-  } catch (error) {
-    if (error.statusCode === 409) {
-      return res.status(409).json({
-        status: "error",
-        message: error.message,
-      });
-    }
-
-    console.error("Registration error:", error.message);
-
-    return res.status(500).json({
-      status: "error",
-      message: "Unable to register user",
-    });
+  if (
+    typeof firstName !== "string" ||
+    !firstName.trim() ||
+    typeof email !== "string" ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ||
+    typeof password !== "string" ||
+    password.length < 8 ||
+    Buffer.byteLength(password, "utf8") > 72
+  ) {
+    const error = new Error(
+      "Provide a valid first name and email, and a password of 8–72 UTF-8 bytes.",
+    );
+    error.statusCode = 400;
+    throw error;
   }
+
+  const data = await registerUser({
+    firstName,
+    lastName,
+    email,
+    password,
+  });
+
+  return sendSuccess(res, data.user, data.message, 201);
+}
+
+export async function verifyEmailController(req, res) {
+  const { email, otp } = req.body ?? {};
+
+  if (
+    typeof email !== "string" ||
+    typeof otp !== "string" ||
+    !/^\d{6}$/.test(otp)
+  ) {
+    const error = new Error("A valid email and 6-digit OTP are required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const data = await verifyEmail({ email, otp });
+  return sendSuccess(res, null, data.message);
+}
+
+export async function resendOtpController(req, res) {
+  const { email } = req.body ?? {};
+
+  if (typeof email !== "string" || !email.trim()) {
+    const error = new Error("A valid email is required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const data = await resendVerificationOtp({ email });
+  return sendSuccess(res, null, data.message);
+}
+
+export async function login(req, res) {
+  const { email, password } = req.body ?? {};
+
+  if (
+    typeof email !== "string" ||
+    typeof password !== "string" ||
+    !email.trim() ||
+    !password
+  ) {
+    const error = new Error("Email and password are required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const data = await loginUser({ email, password });
+  return sendSuccess(res, data, "Login successful");
+}
+
+export async function logout(req, res) {
+  const data = await logoutUser({
+    sessionId: req.user.sessionId,
+    userId: req.user.userId,
+  });
+
+  return sendSuccess(res, null, data.message);
+}
+
+export async function getMe(req, res) {
+  return sendSuccess(res, { user: req.user }, "User fetched successfully");
 }
