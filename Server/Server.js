@@ -3,12 +3,16 @@ import express from "express";
 import "dotenv/config";
 import pool from "./config/db.js";
 import usersRoutes from "../Server/module/users/user.routes.js";
-
+import cookieParser from "cookie-parser";
+import { errorHandler, notFound } from "./middleware/error_middleware.js";
 const app = express();
 const PORT = process.env.PORT || 5000;
-
 app.use(express.json());
+app.use(cookieParser());
 app.use("/api/users", usersRoutes);
+
+app.use(notFound);
+app.use(errorHandler);
 // Basic server check
 app.get("/", (req, res) => {
   res.json({

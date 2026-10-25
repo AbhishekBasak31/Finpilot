@@ -15,7 +15,12 @@ export async function authenticate(req, res, next) {
     const token = authHeader.slice(7).trim();
 
     if (!token || !process.env.JWT_SECRET) {
-      const error = new Error("Invalid authentication configuration or token");
+      const error = new Error(
+        token
+          ? "Authentication service unavailable"
+          : "Access token is missing",
+      );
+
       error.statusCode = token ? 500 : 401;
       throw error;
     }
@@ -23,15 +28,19 @@ export async function authenticate(req, res, next) {
     let decoded;
 
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (error) {
-      const authError = new Error(
-        error.name === "TokenExpiredError"
-          ? "Access token expired. Please log in again."
+      decoded = jwt.verify(token, process.env.JWT_SECRET, {
+        issuer: "finpilot-api",
+        audience: "finpilot-client",
+      });
+    } catch (verificationError) {
+      const error = new Error(
+        verificationError.name === "TokenExpiredError"
+          ? "Access token expired. Please refresh your session."
           : "Invalid access token",
       );
-      authError.statusCode = 401;
-      throw authError;
+
+      error.statusCode = 401;
+      throw error;
     }
 
     if (
@@ -44,8 +53,14 @@ export async function authenticate(req, res, next) {
     }
 
     const result = await pool.query(
-      `SELECT u.id, u.email, u.first_name, u.last_name,
-              u.status, u.email_verified, s.id AS session_id
+      `SELECT
+         u.id,
+         u.email,
+         u.first_name,
+         u.last_name,
+         u.status,
+         u.email_verified,
+         s.id AS session_id
        FROM user_sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.id = $1
@@ -57,7 +72,9 @@ export async function authenticate(req, res, next) {
     const user = result.rows[0];
 
     if (!user) {
-      const error = new Error("Session expired or revoked. Please log in again.");
+      const error = new Error(
+        "Session expired or revoked. Please log in again.",
+      );
       error.statusCode = 401;
       throw error;
     }

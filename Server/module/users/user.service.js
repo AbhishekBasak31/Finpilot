@@ -3,6 +3,8 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import {
   createHmac,
+  createHash,
+  randomBytes,
   randomInt,
   randomUUID,
   timingSafeEqual,
@@ -15,6 +17,39 @@ const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_RESEND_COOLDOWN_SECONDS = 60;
 const OTP_RESEND_MAX_AGE_MINUTES = 30;
+
+const REFRESH_TOKEN_DAYS = Number(
+  process.env.REFRESH_TOKEN_DAYS || 7
+);
+
+function createRefreshToken() {
+  return randomBytes(64).toString("base64url");
+}
+
+function hashRefreshToken(token) {
+  return createHash("sha256")
+    .update(token)
+    .digest("hex");
+}
+
+function createAccessToken(userId, sessionId) {
+  if (!process.env.JWT_SECRET) {
+    throw new Error("JWT_SECRET is not configured");
+  }
+
+  return jwt.sign(
+    {
+      sub: userId,
+      sid: sessionId,
+    },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+      issuer: "finpilot-api",
+      audience: "finpilot-client",
+    },
+  );
+}
 
 function createOtp() {
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
@@ -297,11 +332,8 @@ export async function resendVerificationOtp({ email }) {
   };
 }
 
-export async function loginUser({ email, password }) {
-  if (!process.env.JWT_SECRET) {
-    throw new Error("JWT_SECRET is not configured");
-  }
 
+export async function loginUser({ email, password }) {
   const normalizedEmail = normalizeEmail(email);
 
   const result = await pool.query(
@@ -313,6 +345,7 @@ export async function loginUser({ email, password }) {
   );
 
   const user = result.rows[0];
+
   const passwordMatches = user
     ? await bcrypt.compare(password, user.password_hash)
     : false;
@@ -326,43 +359,151 @@ export async function loginUser({ email, password }) {
   }
 
   if (!user.email_verified) {
-    throw createError("Please verify your email before logging in", 403);
+    throw createError(
+      "Please verify your email before logging in",
+      403,
+    );
   }
 
   const sessionId = randomUUID();
-  const expiresIn = process.env.JWT_EXPIRES_IN || "15m";
+  const refreshToken = createRefreshToken();
+  const refreshTokenHash = hashRefreshToken(refreshToken);
+  const accessToken = createAccessToken(user.id, sessionId);
 
-  // Keep session lifetime aligned with the configured JWT lifetime.
-  // This project intentionally uses a short-lived JWT for now.
-  const token = jwt.sign(
-    { sub: user.id, sid: sessionId },
-    process.env.JWT_SECRET,
-    { expiresIn },
-  );
-
-  const decoded = jwt.decode(token);
-  const expiresAt = new Date(decoded.exp * 1000);
-
-  await pool.query(
-    `INSERT INTO user_sessions (id, user_id, expires_at)
-     VALUES ($1, $2, $3)`,
-    [sessionId, user.id, expiresAt],
+  const sessionResult = await pool.query(
+    `INSERT INTO user_sessions
+       (id, user_id, refresh_token_hash, expires_at)
+     VALUES (
+       $1, $2, $3,
+       NOW() + ($4 * INTERVAL '1 day')
+     )
+     RETURNING expires_at`,
+    [
+      sessionId,
+      user.id,
+      refreshTokenHash,
+      REFRESH_TOKEN_DAYS,
+    ],
   );
 
   return {
     user: safeUser(user),
-    accessToken: token,
+    accessToken,
+    refreshToken,
     tokenType: "Bearer",
-    expiresAt: expiresAt.toISOString(),
+    expiresAt: sessionResult.rows[0].expires_at,
   };
 }
 
-export async function logoutUser({ sessionId, userId }) {
-  await pool.query(
-    `DELETE FROM user_sessions
-     WHERE id = $1 AND user_id = $2`,
-    [sessionId, userId],
-  );
+export async function refreshSession(refreshToken) {
+  if (!refreshToken) {
+    throw createError("Refresh token is missing", 401);
+  }
 
-  return { message: "Logged out successfully" };
+  const client = await pool.connect();
+  let transactionOpen = false;
+
+  try {
+    await client.query("BEGIN");
+    transactionOpen = true;
+
+    const result = await client.query(
+      `SELECT
+         s.id AS session_id,
+         s.user_id,
+         u.email,
+         u.first_name,
+         u.last_name,
+         u.email_verified,
+         u.status
+       FROM user_sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.refresh_token_hash = $1
+         AND s.expires_at > NOW()
+       FOR UPDATE OF s, u`,
+      [hashRefreshToken(refreshToken)],
+    );
+
+    const session = result.rows[0];
+
+    if (!session) {
+      throw createError(
+        "Refresh token is invalid, expired, or revoked",
+        401,
+      );
+    }
+
+    if (
+      session.status !== "ACTIVE" ||
+      !session.email_verified
+    ) {
+      await client.query(
+        `DELETE FROM user_sessions
+         WHERE id = $1`,
+        [session.session_id],
+      );
+
+      await client.query("COMMIT");
+      transactionOpen = false;
+
+      throw createError(
+        "Account is not eligible for authentication",
+        403,
+      );
+    }
+
+    const nextRefreshToken = createRefreshToken();
+    const nextRefreshHash = hashRefreshToken(nextRefreshToken);
+
+    const updated = await client.query(
+      `UPDATE user_sessions
+       SET refresh_token_hash = $1,
+           expires_at = NOW() + ($2 * INTERVAL '1 day')
+       WHERE id = $3
+       RETURNING expires_at`,
+      [
+        nextRefreshHash,
+        REFRESH_TOKEN_DAYS,
+        session.session_id,
+      ],
+    );
+
+    const accessToken = createAccessToken(
+      session.user_id,
+      session.session_id,
+    );
+
+    await client.query("COMMIT");
+    transactionOpen = false;
+
+    return {
+      accessToken,
+      refreshToken: nextRefreshToken,
+      expiresAt: updated.rows[0].expires_at,
+    };
+  } catch (error) {
+    if (transactionOpen) {
+      await client.query("ROLLBACK").catch(() => {});
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
 }
+
+
+export async function logoutUser(refreshToken) {
+  if (refreshToken) {
+    await pool.query(
+      `DELETE FROM user_sessions
+       WHERE refresh_token_hash = $1`,
+      [hashRefreshToken(refreshToken)],
+    );
+  }
+
+  return {
+    message: "Logged out successfully",
+  };
+}
+
