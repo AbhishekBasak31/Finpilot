@@ -49,7 +49,18 @@ describe("validateRegistration", () => {
     const result = validateRegistration(user);
 
     expect(result).toBe("Password must contain at least 8 characters");
+ 
   });
+  test("should return an error when password is missing", () => {
+  const user = {
+    firstName: "Abhishek",
+    email: "abhishek@example.com"
+  };
+
+  const result = validateRegistration(user);
+
+  expect(result).toBe("Password is required");
+});
 });
 
 
@@ -63,23 +74,32 @@ describe("validLogin",()=>{
         const result = validLogin(user);
         expect(result).toBeNull();
     });
+test("should reject an email longer than 255 characters", () => {
+  const user = {
+    email: `${"a".repeat(250)}@example.com`,
+    password: "SecurePass123"
+  };
 
-    test("should return an error for an invalid email id",()=>{
+  const result = validLogin(user);
+
+  expect(result).toBe("Email must not exceed 255 characters");
+});
+    test("should return an error for an invalid email",()=>{
         const user={
             email:"Invalid-email",
             password:"SecurePass123"
         }
         const result = validLogin(user);
-        expect(result).toBe("A valid email id is required");
+        expect(result).toBe("A valid email address is required");
     });
 
-    test("should return an error for an short password",()=>{
+test("should return an error for a whitespace-only password", () => {
         const user={
             email:"securepass123@gmail.com",
-            password:"Inv123"
+            password:" "
         }
         const result = validLogin(user);
-        expect(result).toBe("password must be contain at least 8 character");
+        expect(result).toBe("Password is required");
     });
 });
 
@@ -99,7 +119,7 @@ describe("validEmailVerify",()=>{
             otp:"907123"
         }
         const result = validEmailVerify(data);
-        expect(result).toBe("A valid email id is required");
+        expect(result).toBe("A valid email address is required");
     });
     test("should return an error for a short otp",()=>{
         const data={
@@ -109,6 +129,24 @@ describe("validEmailVerify",()=>{
         const result = validEmailVerify(data);
         expect(result).toBe("A valid otp is required");
     });
+test("should reject an OTP longer than six digits", () => {
+  const data = {
+    email: "securepass123@gmail.com",
+    otp: "1234567"
+  };
+
+  const result = validEmailVerify(data);
+
+  expect(result).toBe("A valid otp is required");
+});
+    test("should reject an otp that contains letters",()=>{
+        const data={
+            email:"securepass123@gmail.com",
+            otp:"9071ab"
+        }
+        const result = validEmailVerify(data);
+        expect(result).toBe("A valid otp is required");
+    })
 });
 
 describe("validResendOtp",()=>{
@@ -125,6 +163,6 @@ describe("validResendOtp",()=>{
             email:"Invalid-email",
         }
         const result = validResendOtp(data);
-        expect(result).toBe("A valid email id is required");
+        expect(result).toBe("A valid email address is required");
     });
 });

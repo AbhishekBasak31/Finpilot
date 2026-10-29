@@ -66,24 +66,14 @@ export function validLogin({
   ) {
     return "A valid email address is required";
   }
-
-  if (email.trim().length > 255) {
-    return "Email must not exceed 255 characters";
-  }
-
+if (email.trim().length > 255) {
+  return "Email must not exceed 255 characters";
+}
    // 4. Validate password
-  if (typeof password !== "string") {
+  if (typeof password !== "string"|| !password.trim()) {
     return "Password is required";
   }
 
-  if (password.length < 8) {
-    return "Password must contain at least 8 characters";
-  }
-
-  // bcrypt has a 72-byte password limit
-  if (Buffer.byteLength(password, "utf8") > 72) {
-    return "Password must not exceed 72 UTF-8 bytes";
-  }
     return null;
 };
 
@@ -100,9 +90,9 @@ export function validEmailVerify({
     return "A valid email address is required";
   }
 
-  if (email.trim().length > 255) {
-    return "Email must not exceed 255 characters";
-  }
+if (email.trim().length > 255) {
+  return "Email must not exceed 255 characters";
+}
 
   if (
     typeof otp !== "string" ||
@@ -111,9 +101,6 @@ export function validEmailVerify({
     return "A valid otp is required";
   }
 
-  if (otp.trim().length > 6) {
-    return "Email must not exceed 6 characters";
-  }
     return null;
 };
 
@@ -128,11 +115,9 @@ export function validResendOtp({
   ) {
     return "A valid email address is required";
   }
-
   if (email.trim().length > 255) {
-    return "Email must not exceed 255 characters";
-  }
+  return "Email must not exceed 255 characters";
+}
 
- 
     return null;
 };
